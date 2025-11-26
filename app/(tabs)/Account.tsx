@@ -1,6 +1,11 @@
-import { Ionicons, MaterialIcons } from "@expo/vector-icons";
+import { Ionicons} from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import { signOut } from "firebase/auth";
+import { 
+    EmailAuthProvider,
+    reauthenticateWithCredential,
+    updatePassword as firebaseUpdatePassword,
+    updateEmail,
+    signOut } from "firebase/auth";
 import {
     collection,
     doc,
@@ -8,24 +13,22 @@ import {
     getDocs,
     query,
 } from "firebase/firestore";
-import React, { use, useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
     Pressable,
     ScrollView,
     StyleSheet,
     Text,
     TextInput,
-    TouchableOpacity,
     View,
 } from "react-native";
-import Toast from "react-native-toast-message";
 import { auth, db } from "../../lib/firebase";
 
 
 import { User,updateUserName,updateUserEmail, saveUserPlatforms } from "../../modules/user";
 import{ Boxes} from "../../components/boxes"
 import { Typography } from "../../components/Typography";
-import { updateCurrentUser, updateEmail } from "firebase/auth";
+
 
 
 const GAP = 16;
@@ -46,23 +49,37 @@ export default function Account(){
 
     const router = useRouter();
     const [busy,setBusy]=useState(false);
+    const[platformLoading,setPlatformLoading]=useState(false);
     const [userName, setUserName]=useState("");
     const [email, setEmail]=useState("");
     const [password, setPassword]=useState("");
+    const[currentPassword,setCurrentPassword]=useState("");
+    const [confirmPassword, setConfirmPassword]=useState("");
     const [ownedPlatforms, setOwnedPlatforms]=useState<Platform[]>([]);
     const [display,setDisplay]=useState(true);
     const [edit,setEdit]=useState(false);
+    const[edit2,setEdit2]=useState(false);
 
     const platforms = [
     "Playstation 5",
     "Playstation 4",
-    "Xbox Series X/S",
+    "Xbox Series X-S",
     "Nintendo Switch",
     "Mobile",
     "PC"
     ]
     const [tempOwnedPlatforms, setTempOwnedPlatforms]=useState<string[]>([]);
 
+
+    const reauthenticate = async(password:string) => {
+        const user = auth.currentUser;
+        if (!user) {
+            console.error("No user is signed in");
+            return;
+        }
+        const credential = EmailAuthProvider.credential( user.email!, password);
+        await reauthenticateWithCredential(user, credential);
+    }
 
     const onSelectedPlatform = (platform: string) => {
         setTempOwnedPlatforms(prev => 
@@ -74,6 +91,7 @@ export default function Account(){
     
 
     const getUserData = async () => {
+        setPlatformLoading(true);
         const user = auth.currentUser;
             if (!user) {
                 console.error("No user is signed in");
@@ -98,12 +116,16 @@ export default function Account(){
                 
             }));
         setOwnedPlatforms(data);
+        setPlatformLoading(false);
         // console.info(ownedPlatforms)
     };
+
+    useEffect(() => {
     getUserData();
+    }, []);
 
 
-    
+
     const onEditPressed = () => {
         setDisplay(false);
         setEdit(true);
@@ -113,6 +135,8 @@ export default function Account(){
     const onCancelPressed = () => {
         setDisplay(true);
         setEdit(false);
+        setEdit2(false);
+        setTempOwnedPlatforms([]);
     }
 
     useEffect(() => {
@@ -137,17 +161,50 @@ export default function Account(){
             console.error("No user is signed in");
             setBusy(false);
             return;
-        } 
-        updateCurrentUser(auth, user);
+        }
         
-        updateUserName(user.uid, userName);
-        updateUserEmail(user.uid, email);
-        updateEmail(user, email).catch((error) => {
-            console.error("Error updating email in auth:", error);
-        });
-        saveUserPlatforms(user.uid, tempOwnedPlatforms, ownedPlatforms.map(p => p.platform));
-        setDisplay(true);
-        setEdit(false);
+        try{
+            if(email !== user.email){
+                await updateEmail(user, email);
+            }
+            await updateUserName(user.uid, userName);
+            await updateUserEmail(user.uid, email);
+        
+            await saveUserPlatforms(user.uid, tempOwnedPlatforms, ownedPlatforms.map(p => p.platform));
+            setOwnedPlatforms(tempOwnedPlatforms.map(platform => ({id: platform.toLowerCase().replace(/\s+/g, '-'), platform})));
+
+            if(edit2){
+                if(password.length <6){
+                    alert("Password should be at least 6 characters long");
+                    setBusy(false);
+                    return;
+                }
+                if(password !== confirmPassword){
+                    alert("Passwords do not match");
+                    setBusy(false);
+                    return;
+                }
+                await reauthenticate(currentPassword);
+
+                await firebaseUpdatePassword(user, password);
+
+                setCurrentPassword("");
+                setPassword("");
+                setConfirmPassword("");
+                setEdit2(false);
+            }
+            setDisplay(true);
+            setEdit(false);
+            setTempOwnedPlatforms([]);
+        } catch (err: any){
+        if (err.code === "auth/wrong-password") {
+            alert("Current password is incorrect");
+        } else if (err.code === "auth/requires-recent-login") {
+            alert("Please log in again to change your password");
+        } else {
+            alert("Failed to update: " + err.message);
+        }
+        }
         setBusy(false);
 
 
@@ -174,7 +231,7 @@ export default function Account(){
                 )}
                 {edit &&(
                     <TextInput
-                    placeholder={userName}
+                    value={userName}
                     onChangeText={setUserName}
                     style={[Typography.body, Boxes.textImputBox]}/>
                 )}
@@ -187,7 +244,7 @@ export default function Account(){
                 )}
                 {edit && (
                     <TextInput
-                    placeholder={email}
+                    value={email}
                     onChangeText={setEmail}
                     style={[Typography.body, Boxes.textImputBox]}/>
                 )}
@@ -195,7 +252,7 @@ export default function Account(){
                     <Ionicons name="game-controller-outline" size={18} color="white" />
                     <Text style={Typography.subtitle}>Owned Consoles</Text>
                 </View>
-                {display &&(
+                {display && !platformLoading &&(
                     <View style={[styles.iconText]}>
                 {ownedPlatforms.map((ownedPlatform) => (
                     <View style={styles.option} key={ownedPlatform.platform}>
@@ -214,6 +271,34 @@ export default function Account(){
                                 </View>
                             ))}
                         </View>
+                        <Text style={Typography.link} onPress={() => setEdit2(true)}>
+                            Update Password
+                        </Text>
+                        {edit2 &&(
+                            <>
+                            <TextInput
+                            placeholder="Current Password"
+                            secureTextEntry
+                            value={currentPassword}
+                            onChangeText={setCurrentPassword}
+                            style={[Boxes.textImputBox, Typography.placeholder]}
+                            />
+                            <TextInput
+                            placeholder="New Password"
+                            secureTextEntry
+                            value={password}
+                            onChangeText={setPassword}
+                            style={[Boxes.textImputBox, Typography.placeholder]}
+                            />
+                            <TextInput
+                            placeholder="Confirm New Password"
+                            secureTextEntry
+                            value={confirmPassword}
+                            onChangeText={setConfirmPassword}
+                            style={[Boxes.textImputBox, Typography.placeholder]}
+                            />
+                            </>
+                        )}
                         <Pressable
                             onPress={onSavePressed}
                             
@@ -263,7 +348,8 @@ const styles = StyleSheet.create({
     iconText: {
         flexDirection: "row",
         alignItems: "center",
-        gap: 8
+        gap: 8,
+        flexWrap: "wrap" 
     }, 
     titleBar: {
         flexDirection: "row",
@@ -271,7 +357,7 @@ const styles = StyleSheet.create({
         alignItems: "center",
         marginBottom: 16,
     },
-    option: { flexDirection: "row", alignItems: "center", gap: 10 },
+    option: { flexDirection: "row", alignItems: "center", gap: 10},
     optionColumn: { flexDirection: "column", alignItems: "center", gap: 10 },
     metaSmall: {
     fontSize: 16,

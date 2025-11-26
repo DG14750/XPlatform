@@ -91,7 +91,7 @@ export default function SignUp() {
   const platforms = [
     "Playstation 5",
     "Playstation 4",
-    "Xbox Series X/S",
+    "Xbox Series X-S",
     "Nintendo Switch",
     "Mobile",
     "PC"
