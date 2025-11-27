@@ -23,11 +23,18 @@ import {
   StyleSheet,
   Text,
   useWindowDimensions,
-  View
+  View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import Toast from "react-native-toast-message";
 import GameCard from "../../../components/GameCard";
+import ReviewsSection from "../../../components/ReviewsSection";
 import { auth, db } from "../../../lib/firebase";
+
+console.log(">>> Loaded app/(tabs)/game/[id].tsx"); // debug – remove later
+console.log(">>> GameDetail render file loaded"); // debug – remove later
+
+// Define game structure for Firestore data
 
 type Game = {
   id: string;
@@ -98,7 +105,6 @@ export default function GameDetail() {
           Image.getSize(
             preferred,
             (w, h) => mounted && setImgRatio(w / Math.max(1, h)),
-            // If the hero URL fails, try the original cover once
             () => {
               if (!mounted) return;
               if (g.coverUrl && preferred !== g.coverUrl) {
@@ -125,8 +131,10 @@ export default function GameDetail() {
           );
           const rs = await getDocs(qRel);
           const rel = rs.docs
-            .map(d => ({ id: d.id, ...(d.data() as Omit<Game, "id">) } as Game))
-            .filter(x => x.id !== g.id);
+            .map(
+              (d) => ({ id: d.id, ...(d.data() as Omit<Game, "id">) } as Game)
+            )
+            .filter((x) => x.id !== g.id);
           if (mounted) setRelated(rel);
         } else {
           if (mounted) setRelated([]);
@@ -159,10 +167,12 @@ export default function GameDetail() {
   // Open the game's Steam store page
   const openSteam = () => {
     if (!game?.steamAppId) return;
-    Linking.openURL(`https://store.steampowered.com/app/${game.steamAppId}`).catch(() => {});
+    Linking.openURL(
+      `https://store.steampowered.com/app/${game.steamAppId}`
+    ).catch(() => {});
   };
 
-  // Add/remove from wishlist for current user
+  // Add or remove game from wishlist
   const toggleWishlist = async () => {
     if (!game) return;
     const user = auth.currentUser;
@@ -177,61 +187,76 @@ export default function GameDetail() {
       if (wishDocId) {
         await deleteDoc(doc(db, "users", user.uid, "wishlist", wishDocId));
         setWishDocId(null);
-      } else {
-        const ref = await addDoc(collection(db, "users", user.uid, "wishlist"), {
-          gameId: game.id,
-          title: game.title,
-          coverUrl: game.coverUrl,
-          genres: game.genres ?? [],
-          ratingAvg: game.ratingAvg ?? null,
-          platforms: game.platforms ?? [],
-          createdAt: serverTimestamp(),
+
+        Toast.show({
+          type: "success",
+          text1: `${game.title} removed from wishlist`,
         });
+      } else {
+        const ref = await addDoc(
+          collection(db, "users", user.uid, "wishlist"),
+          {
+            gameId: game.id,
+            title: game.title,
+            coverUrl: game.coverUrl,
+            genres: game.genres ?? [],
+            ratingAvg: game.ratingAvg ?? null,
+            platforms: game.platforms ?? [],
+            createdAt: serverTimestamp(),
+          }
+        );
         setWishDocId(ref.id);
+
+        Toast.show({
+          type: "success",
+          text1: `${game.title} added to wishlist`,
+        });
       }
+    } catch (e) {
+      console.error("Error toggling wishlist:", e);
+      Toast.show({
+        type: "error",
+        text1: "Error updating wishlist",
+      });
     } finally {
       setWishBusy(false);
     }
   };
 
   const readableDate = useMemo(() => {
-  if (!game?.releaseDate) return undefined;
+    if (!game?.releaseDate) return undefined;
 
-  // If Firestore Timestamp then convert normally
-  if (typeof game.releaseDate?.toDate === "function") {
-    try {
-      return game.releaseDate.toDate().toLocaleDateString();
-    } catch {
-      return undefined;
-    }
-  }
-
-  // switched to string format "DD/MM/YYYY"
-  if (typeof game.releaseDate === "string") {
-    const parts = game.releaseDate.split("/"); // ["14","11","2024"]
-
-    if (parts.length === 3) {
-      const [day, month, year] = parts;
-      const d = new Date(
-        Number(year),
-        Number(month) - 1, // JS months are 0-indexed 
-        Number(day)
-      );
-
-      if (!isNaN(d.getTime())) {
-        return d.toLocaleDateString();
+    if (typeof game.releaseDate?.toDate === "function") {
+      try {
+        return game.releaseDate.toDate().toLocaleDateString();
+      } catch {
+        return undefined;
       }
     }
 
-    return game.releaseDate; // fallback: show raw string
-  }
+    if (typeof game.releaseDate === "string") {
+      const parts = game.releaseDate.split("/");
 
-  // Anything else then fallback
-  return String(game.releaseDate);
-}, [game?.releaseDate]);
+      if (parts.length === 3) {
+        const [day, month, year] = parts;
+        const d = new Date(
+          Number(year),
+          Number(month) - 1,
+          Number(day)
+        );
 
+        if (!isNaN(d.getTime())) {
+          return d.toLocaleDateString();
+        }
+      }
 
-  // Basic entity decoding for a few common HTML entities
+      return game.releaseDate;
+    }
+
+    return String(game.releaseDate);
+  }, [game?.releaseDate]);
+
+  // Basic decoding for common HTML entities
   const plainDescription = useMemo(() => {
     if (!game?.description) return "";
     return game.description
@@ -242,7 +267,6 @@ export default function GameDetail() {
       .replace(/&gt;/g, ">");
   }, [game?.description]);
 
-  // Loading state
   if (loading) {
     return (
       <View style={styles.center}>
@@ -251,65 +275,69 @@ export default function GameDetail() {
     );
   }
 
-  // Not found state
   if (!game) {
     return (
       <View style={styles.center}>
         <Text style={{ color: "#fff" }}>Game not found.</Text>
-        <Pressable onPress={() => router.replace("/(tabs)/home")} style={styles.backBtn}>
+        <Pressable
+          onPress={() => router.replace("/(tabs)/home")}
+          style={styles.backBtn}
+        >
           <Text style={{ color: "#fff", fontWeight: "600" }}>Go Home</Text>
         </Pressable>
       </View>
     );
   }
 
-  // Decide how to render the selected image:
-  // - Poster if narrow
-  // - Banner if wide; keep real aspect ratio but clamp extremes a bit
   const ratio = imgRatio ?? 2.2;
   const isPoster = ratio < 1.25;
   const bannerRatio = Math.max(1.6, Math.min(ratio, 3.2));
 
- return (
-  <SafeAreaView
-    style={{ flex: 1, backgroundColor: "#0b1220" }}
-    edges={["top", "left", "right"]} // now includes the notch padding
-  >
-    <ScrollView style={styles.screen} contentContainerStyle={{ paddingBottom: 32 }}>
-      {/* Header */}
-      <View style={[styles.headerRow, { marginTop: 8 }]}>
-        <Pressable
-          onPress={() => router.replace("/(tabs)/home")}
-          style={({ pressed }) => [
-            styles.backIcon,
-            { opacity: pressed ? 0.6 : 1 },
-          ]}
-        >
-          <Ionicons name="chevron-back" size={26} color="#e5e7eb" />
-        </Pressable>
+  return (
+    <SafeAreaView
+      style={{ flex: 1, backgroundColor: "#0b1220" }}
+      edges={["top", "left", "right"]}
+    >
+      <ScrollView
+        style={styles.screen}
+        contentContainerStyle={{ paddingBottom: 32 }}
+      >
+        {/* Header */}
+        <View style={[styles.headerRow, { marginTop: 8 }]}>
+          <Pressable
+            onPress={() => router.replace("/(tabs)/home")}
+            style={({ pressed }) => [
+              styles.backIcon,
+              { opacity: pressed ? 0.6 : 1 },
+            ]}
+          >
+            <Ionicons name="chevron-back" size={26} color="#e5e7eb" />
+          </Pressable>
 
-        <Text style={styles.headerTitle} numberOfLines={2}>
-          {game.title}
-        </Text>
+          <Text style={styles.headerTitle} numberOfLines={2}>
+            {game.title}
+          </Text>
 
-        <Pressable
-          onPress={toggleWishlist}
-          disabled={wishBusy}
-          style={({ pressed }) => [
-            styles.heartBtn,
-            { opacity: pressed ? 0.6 : 1 },
-          ]}
-        >
-          <Ionicons
-            name={wishDocId ? "heart" : "heart-outline"}
-            size={26}
-            color={wishDocId ? "#ef4444" : "#e5e7eb"}
-          />
-        </Pressable>
-      </View>
+          <Pressable
+            onPress={toggleWishlist}
+            disabled={wishBusy}
+            style={({ pressed }) => [
+              styles.heartBtn,
+              { opacity: pressed ? 0.6 : 1 },
+            ]}
+          >
+            <Ionicons
+              name={wishDocId ? "heart" : "heart-outline"}
+              size={26}
+              color={wishDocId ? "#ef4444" : "#e5e7eb"}
+            />
+          </Pressable>
+        </View>
 
         {/* hero image (banner or poster) */}
-        <View style={[styles.posterWrap, isWideLayout && styles.posterWrapWide]}>
+        <View
+          style={[styles.posterWrap, isWideLayout && styles.posterWrapWide]}
+        >
           {heroUrl ? (
             <Image
               source={{ uri: heroUrl }}
@@ -321,7 +349,6 @@ export default function GameDetail() {
               ]}
               resizeMode={isPoster ? "contain" : "cover"}
               onError={() => {
-                // Fall back to original cover once if hero fails
                 if (game.coverUrl && heroUrl !== game.coverUrl) {
                   setHeroUrl(game.coverUrl);
                 }
@@ -352,23 +379,29 @@ export default function GameDetail() {
           {/* genres */}
           {!!game.genres?.length && (
             <View style={styles.chipsRow}>
-              {game.genres.slice(0, 6).map(g => (
-                <View key={g} style={styles.chip}><Text style={styles.chipText}>{g}</Text></View>
+              {game.genres.slice(0, 6).map((g) => (
+                <View key={g} style={styles.chip}>
+                  <Text style={styles.chipText}>{g}</Text>
+                </View>
               ))}
             </View>
           )}
 
-          {/* platforms with +N overflow */}
+          {/* platforms with overflow */}
           {!!game.platforms?.length && (
             <>
               <Text style={styles.sectionTitle}>Platforms</Text>
               <View style={styles.chipsRow}>
-                {game.platforms.slice(0, 2).map(p => (
-                  <View key={p} style={styles.chip}><Text style={styles.chipText}>{p}</Text></View>
+                {game.platforms.slice(0, 2).map((p) => (
+                  <View key={p} style={styles.chip}>
+                    <Text style={styles.chipText}>{p}</Text>
+                  </View>
                 ))}
                 {game.platforms.length > 2 && (
                   <View style={styles.chip}>
-                    <Text style={styles.chipText}>+{game.platforms.length - 2}</Text>
+                    <Text style={styles.chipText}>
+                      +{game.platforms.length - 2}
+                    </Text>
                   </View>
                 )}
               </View>
@@ -390,6 +423,19 @@ export default function GameDetail() {
               <Text style={styles.ctaText}>View on Steam</Text>
             </Pressable>
           )}
+
+          {/* reviews section */}
+          <ReviewsSection
+            gameId={game.id}
+            gameTitle={game.title}
+            onRatingUpdated={(avg) =>
+              setGame((prev) =>
+                prev && prev.id === game.id
+                  ? { ...prev, ratingAvg: avg ?? undefined }
+                  : prev
+              )
+            }
+          />
         </View>
 
         {/* related carousel */}
@@ -434,11 +480,20 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   backIcon: { padding: 10 },
-  headerTitle: { color: "#F3F4F6", fontSize: 22, fontWeight: "800", flex: 1, borderRadius: 20,},
-  heartBtn: { padding: 10, borderRadius: 20, },
+  headerTitle: {
+    color: "#F3F4F6",
+    fontSize: 22,
+    fontWeight: "800",
+    flex: 1,
+    borderRadius: 20,
+  },
+  heartBtn: { padding: 10, borderRadius: 20 },
 
-  // hero container
-  posterWrap: { alignItems: "center", justifyContent: "center", paddingHorizontal: 16 },
+  posterWrap: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 16,
+  },
   posterWrapWide: { alignItems: "flex-start" },
   poster: {
     borderRadius: 12,
@@ -451,7 +506,6 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0,0,0,0.06)",
   },
 
-  // info
   infoWrap: { paddingHorizontal: 16, marginTop: 12 },
   metaRow: { flexDirection: "row", gap: 8, marginBottom: 8 },
   metaPill: {
@@ -474,7 +528,12 @@ const styles = StyleSheet.create({
     marginTop: 14,
     marginBottom: 8,
   },
-  chipsRow: { flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "nowrap" },
+  chipsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    flexWrap: "nowrap",
+  },
   chip: {
     backgroundColor: "#111827",
     borderWidth: 1,
@@ -487,7 +546,6 @@ const styles = StyleSheet.create({
 
   description: { color: "#cbd5e1", lineHeight: 20 },
 
-  // compact CTA
   ctaSmall: {
     alignSelf: "flex-start",
     flexDirection: "row",
@@ -503,8 +561,12 @@ const styles = StyleSheet.create({
   },
   ctaText: { color: "#fff", fontWeight: "600" },
 
-  // misc states
-  center: { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: "#0b1220" },
+  center: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "#0b1220",
+  },
   backBtn: {
     marginTop: 12,
     paddingHorizontal: 16,
