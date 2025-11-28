@@ -1,5 +1,5 @@
 // app/(tabs)/home.tsx
-// Tried to keep as close to Figma mobile mockups whilst suiting the Firebase setup I created.
+// Home screen with shared AppHeader + wishlist hearts
 
 import { Ionicons, MaterialIcons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
@@ -26,13 +26,13 @@ import {
   View,
 } from "react-native";
 import Toast from "react-native-toast-message";
+import AppHeader from "../../components/AppHeader";
 import GameCard from "../../components/GameCard";
 import { auth, db } from "../../lib/firebase";
-import {addToWishList, deleteFromWishlist} from "../../modules/wishlist";
 
-
-
-// Define game structure for Firestore data
+// -------------------------------
+// 🔹 Types
+// -------------------------------
 type Game = {
   id: string;
   title: string;
@@ -42,7 +42,6 @@ type Game = {
   platforms?: string[];
 };
 
-//Define user structure for Firestore data
 type User = {
   uid: string;
   email: string;
@@ -52,27 +51,25 @@ type User = {
 };
 
 // Layout constants
-const GAP = 16;       // spacing between cards
-const PAGE_PAD = 16;  // horizontal padding for the page
+const GAP = 16;
+const PAGE_PAD = 16;
 
 export default function Home() {
-  // -------------------------------
-  // 🔹 State variables
-  // -------------------------------
-  const [games, setGames] = useState<Game[]>([]); // list of all games from Firestore
-  const [loading, setLoading] = useState(true);   // loader until games are fetched
-  const [search, setSearch] = useState("");       // text input search term
-  const [genreFilter, setGenreFilter] = useState("All");       // selected genre
-  const [platformFilter, setPlatformFilter] = useState("All"); // selected platform
+  const [games, setGames] = useState<Game[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  // Map of gameId -> wishlist document id (used to show pink heart + remove)
+  const [search, setSearch] = useState("");
+  const [genreFilter, setGenreFilter] = useState("All");
+  const [platformFilter, setPlatformFilter] = useState("All");
+
+  // gameId -> wishlistDocId
   const [wishlistMap, setWishlistMap] = useState<Record<string, string>>({});
 
   const router = useRouter();
   const { width } = useWindowDimensions();
 
   // -------------------------------
-  // 🔹 Fetch all games from Firestore
+  // 🔹 Fetch all games
   // -------------------------------
   useEffect(() => {
     const fetchGames = async () => {
@@ -94,11 +91,14 @@ export default function Home() {
   }, []);
 
   // -------------------------------
-  // 🔹 Listen to wishlist so hearts stay in sync
+  // 🔹 Wishlist listener (keeps hearts in sync)
   // -------------------------------
   useEffect(() => {
     const user = auth.currentUser;
-    if (!user) return;
+    if (!user) {
+      setWishlistMap({});
+      return;
+    }
 
     const q = query(collection(db, "users", user.uid, "wishlist"));
     const unsubscribe = onSnapshot(q, (snap) => {
@@ -106,6 +106,7 @@ export default function Home() {
       snap.forEach((d) => {
         const data = d.data() as { gameId?: string };
         if (data.gameId) {
+          // key = gameId from games collection
           next[data.gameId] = d.id;
         }
       });
@@ -116,29 +117,26 @@ export default function Home() {
   }, []);
 
   // -------------------------------
-  // 🔹 Sign-out logic
+  // 🔹 Sign-out
   // -------------------------------
   const handleSignOut = async () => {
     try {
       await signOut(auth);
-      router.replace("/"); // navigate back to login
+      router.replace("/");
     } catch (e) {
       console.error("Error signing out:", e);
     }
   };
 
   // -------------------------------
-  // 🔹 Responsive grid columns (adjust per screen width)
+  // 🔹 Responsive grid columns
   // -------------------------------
   const numColumns = useMemo(() => {
-    if (width >= 1200) return 3; // large desktop
-    if (width >= 900) return 2;  // tablet / wide web
-    return 1;                    // mobile
+    if (width >= 1200) return 3;
+    if (width >= 900) return 2;
+    return 1;
   }, [width]);
 
-  // -------------------------------
-  // 🔹 Compute item width per column (keeps consistent aspect ratio)
-  // -------------------------------
   const itemWidth = useMemo(() => {
     const totalGaps = (numColumns - 1) * GAP;
     const usable = Math.max(0, width - PAGE_PAD * 2 - totalGaps);
@@ -146,54 +144,69 @@ export default function Home() {
   }, [width, numColumns]);
 
   // -------------------------------
-  // 🔹 Combined search + filter logic
+  // 🔹 Search + filters
   // -------------------------------
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
 
     return games.filter((g) => {
-      // search match: title, genre, or platform
       const matchesSearch =
         !q ||
         g.title.toLowerCase().includes(q) ||
         g.genres?.some((x) => x.toLowerCase().includes(q)) ||
         g.platforms?.some((x) => x.toLowerCase().includes(q));
 
-      // genre match (if user selected a genre)
       const matchesGenre =
         genreFilter === "All" ||
-        g.genres?.some((x) => x.toLowerCase() === genreFilter.toLowerCase());
+        g.genres?.some(
+          (x) => x.toLowerCase() === genreFilter.toLowerCase()
+        );
 
-      // platform match (if user selected a platform)
       const matchesPlatform =
         platformFilter === "All" ||
-        g.platforms?.some((x) => x.toLowerCase() === platformFilter.toLowerCase());
+        g.platforms?.some(
+          (x) => x.toLowerCase() === platformFilter.toLowerCase()
+        );
 
       return matchesSearch && matchesGenre && matchesPlatform;
     });
   }, [games, search, genreFilter, platformFilter]);
 
   // -------------------------------
-  // 🔹 Add to wishlist
+  // 🔹 Add to wishlist (no duplicates)
   // -------------------------------
-  const addToWishList = async (game: Game) => {
+  const handleAddToWishList = async (game: Game) => {
     try {
       const user = auth.currentUser;
       if (!user) {
-        console.error("No user is signed in");
+        alert("Please sign in to use wishlist.");
         return;
       }
 
-      await addDoc(collection(db, "users", user.uid, "wishlist"), {
-        gameId: game.id,
-        title: game.title,
-        coverUrl: game.coverUrl,
-        genres: game.genres,
-        ratingAvg: game.ratingAvg,
-        platforms: game.platforms,
-        createdAt: new Date(),
-      });
-      console.log(`${game.title} added to wishlist`);
+      // Already in wishlist? Just bail.
+      if (wishlistMap[game.id]) {
+        Toast.show({
+          type: "info",
+          text1: "Already in wishlist",
+        });
+        return;
+      }
+
+      const ref = await addDoc(
+        collection(db, "users", user.uid, "wishlist"),
+        {
+          gameId: game.id,
+          title: game.title,
+          coverUrl: game.coverUrl,
+          genres: game.genres ?? [],
+          ratingAvg: game.ratingAvg ?? null,
+          platforms: game.platforms ?? [],
+          createdAt: new Date(),
+        }
+      );
+
+      // onSnapshot will update wishlistMap, no need to manually set
+      console.log("Added to wishlist:", ref.id);
       Toast.show({
         type: "success",
         text1: `${game.title} added to wishlist`,
@@ -210,11 +223,11 @@ export default function Home() {
   // -------------------------------
   // 🔹 Remove from wishlist
   // -------------------------------
-  const removeFromWishList = async (game: Game) => {
+  const handleRemoveFromWishList = async (game: Game) => {
     try {
       const user = auth.currentUser;
       if (!user) {
-        console.error("No user is signed in");
+        alert("Please sign in to use wishlist.");
         return;
       }
 
@@ -224,7 +237,8 @@ export default function Home() {
       }
 
       await deleteDoc(doc(db, "users", user.uid, "wishlist", wishlistDocId));
-      console.log(`${game.title} removed from wishlist`);
+
+      // onSnapshot will update wishlistMap
       Toast.show({
         type: "success",
         text1: `${game.title} removed from wishlist`,
@@ -239,7 +253,7 @@ export default function Home() {
   };
 
   // -------------------------------
-  // 🔹 Loading state
+  // 🔹 Loading
   // -------------------------------
   if (loading) {
     return (
@@ -250,17 +264,11 @@ export default function Home() {
   }
 
   // -------------------------------
-  // 🔹 Render main screen
+  // 🔹 Render
   // -------------------------------
   return (
     <View style={styles.screen}>
-      {/* Header Bar */}
-      <View style={styles.topBar}>
-        <Text style={styles.heading}>Discover Games</Text>
-        <TouchableOpacity onPress={handleSignOut}>
-          <Text style={styles.signOut}>Sign Out</Text>
-        </TouchableOpacity>
-      </View>
+      <AppHeader title="Discover Games" onSignOut={handleSignOut} />
 
       {/* Search + filters row */}
       <View style={styles.controlsRow}>
@@ -276,11 +284,10 @@ export default function Home() {
           />
         </View>
 
-        {/* Filter: genre (simple toggle cycle) */}
+        {/* Genre filter (simple cycle) */}
         <TouchableOpacity
           style={styles.fakeDropdown}
           onPress={() => {
-            // simple rotation of filter options for now
             const next =
               genreFilter === "All"
                 ? "Action"
@@ -294,10 +301,14 @@ export default function Home() {
         >
           <MaterialIcons name="filter-list" size={18} color="#9aa3af" />
           <Text style={styles.fakeDropdownText}>{genreFilter}</Text>
-          <MaterialIcons name="keyboard-arrow-down" size={18} color="#9aa3af" />
+          <MaterialIcons
+            name="keyboard-arrow-down"
+            size={18}
+            color="#9aa3af"
+          />
         </TouchableOpacity>
 
-        {/* Filter: platform (simple toggle cycle) */}
+        {/* Platform filter (simple cycle) */}
         <TouchableOpacity
           style={styles.fakeDropdown}
           onPress={() => {
@@ -313,17 +324,21 @@ export default function Home() {
           }}
         >
           <Text style={styles.fakeDropdownText}>{platformFilter}</Text>
-          <MaterialIcons name="keyboard-arrow-down" size={18} color="#9aa3af" />
+          <MaterialIcons
+            name="keyboard-arrow-down"
+            size={18}
+            color="#9aa3af"
+          />
         </TouchableOpacity>
       </View>
 
-      {/* Count text below filters */}
+      {/* Count text */}
       <Text style={styles.countText}>{filtered.length} games found</Text>
 
-      {/* Main grid list */}
+      {/* Grid list */}
       <FlatList
         data={filtered}
-        key={numColumns} // force reflow when layout changes
+        key={numColumns}
         numColumns={numColumns}
         keyExtractor={(item) => item.id}
         contentContainerStyle={{
@@ -340,13 +355,11 @@ export default function Home() {
             <View style={{ width: itemWidth }}>
               <GameCard
                 game={item}
-                // If not in wishlist yet, allow adding
                 onAddToWishList={
-                  !isWishlisted ? () => addToWishList(item) : undefined
+                  !isWishlisted ? () => handleAddToWishList(item) : undefined
                 }
-                // If already in wishlist, show pink heart and allow removing
                 onRemoveFromWishList={
-                  isWishlisted ? () => removeFromWishList(item) : undefined
+                  isWishlisted ? () => handleRemoveFromWishList(item) : undefined
                 }
                 onPress={() =>
                   router.push({
@@ -372,15 +385,6 @@ const styles = StyleSheet.create({
     backgroundColor: "#0b1220",
     paddingTop: 40,
   },
-  topBar: {
-    paddingHorizontal: PAGE_PAD,
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 16,
-  },
-  heading: { color: "#F3F4F6", fontSize: 22, fontWeight: "800" },
-  signOut: { color: "#60A5FA", fontSize: 14, fontWeight: "600" },
 
   controlsRow: {
     paddingHorizontal: PAGE_PAD,
@@ -390,6 +394,7 @@ const styles = StyleSheet.create({
     gap: 12,
     marginBottom: 8,
   },
+
   searchWrap: {
     flexGrow: 1,
     flexShrink: 1,
@@ -413,6 +418,7 @@ const styles = StyleSheet.create({
     color: "#e5e7eb",
     fontSize: 14,
   },
+
   fakeDropdown: {
     flexDirection: "row",
     alignItems: "center",
@@ -425,6 +431,7 @@ const styles = StyleSheet.create({
     borderColor: "#1f2937",
   },
   fakeDropdownText: { color: "#e5e7eb" },
+
   countText: {
     paddingHorizontal: PAGE_PAD,
     color: "#9aa3af",
